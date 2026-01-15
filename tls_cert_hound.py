@@ -74,13 +74,15 @@ class ThrottleController:
             return
         self.success_streak += 1
         if self.success_streak >= 5 and self.delay > 0:
+            old_delay = self.delay
             self.delay = max(self.delay / 2.0, 0.1)
             self.success_streak = 0
-            log_message(
-                f"[*] Auto-throttle: 5 successful requests, delay now {self.delay:.2f}s.",
-                self.verbose,
-                force=True,
-            )
+            if old_delay != self.delay:
+                log_message(
+                    f"[*] Auto-throttle: 5 successful requests, delay now {self.delay:.2f}s.",
+                    self.verbose,
+                    force=True,
+                )
 
     def record_503(self):
         if not self.auto:
@@ -169,6 +171,7 @@ def write_compiled_data(
     output_path: str,
     verbose: bool,
     no_disk_write: bool,
+    metadata: dict,
 ):
     if no_disk_write:
         return
@@ -177,8 +180,23 @@ def write_compiled_data(
     if dir_path:
         os.makedirs(dir_path, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(results, handle)
+        json.dump({"meta": metadata, "results": results}, handle)
     log_message(f"[*] Wrote compiled data to {path}.", verbose)
+
+
+def load_compiled_data(path: str, verbose: bool):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        log_message(f"[!] Compiled data file not found: {path}.", True, force=True)
+        return None, None
+    if isinstance(data, list):
+        return data, {}
+    if isinstance(data, dict):
+        return data.get("results", []), data.get("meta", {})
+    log_message(f"[!] Unsupported compiled data format: {path}.", True, force=True)
+    return None, None
 
 
 def cert_key(entry):
@@ -239,7 +257,16 @@ def is_blacklisted(domain: str, patterns):
     if not patterns:
         return False
     value = domain.lower()
-    return any(regex.search(value) for regex in patterns)
+    variants = {value}
+    if value.startswith("*."):
+        variants.add(value[2:])
+    else:
+        variants.add(f"*.{value}")
+    if "." in value:
+        parent = value.split(".", 1)[1]
+        variants.add(parent)
+        variants.add(f"*.{parent}")
+    return any(regex.search(candidate) for regex in patterns for candidate in variants)
 
 
 def filter_entries_by_blacklist(entries, patterns, verbose: bool):
@@ -248,7 +275,16 @@ def filter_entries_by_blacklist(entries, patterns, verbose: bool):
     filtered = []
     skipped = 0
     for entry in entries:
-        domains = extract_domains(entry)
+        domains = []
+        name_value = entry.get("name_value") or ""
+        common_name = entry.get("common_name") or ""
+        for item in name_value.split():
+            domain = normalize_domain(item, keep_wildcard=True)
+            if domain:
+                domains.append(domain)
+        cn_domain = normalize_domain(common_name, keep_wildcard=True)
+        if cn_domain:
+            domains.append(cn_domain)
         if any(is_blacklisted(domain, patterns) for domain in domains):
             skipped += 1
             continue
@@ -265,7 +301,9 @@ def opengraph_output_path(domain: str, output_data_path: str):
     return f"{base_path}.opengraph.json"
 
 
-def build_opengraph_nodes(results, search_term, search_depth, blacklist_entries):
+def build_opengraph_nodes(
+    results, search_term, search_depth, blacklist_entries, search_date=None
+):
     try:
         from bhopengraph import OpenGraph, Node, Properties, Edge
     except Exception as exc:
@@ -314,7 +352,7 @@ def build_opengraph_nodes(results, search_term, search_depth, blacklist_entries)
             flags["is_cn"] = True
 
         name_value = entry.get("name_value") or ""
-        for item in name_value.split():
+        for item in name_value.splitlines():
             domain = normalize_domain(item, keep_wildcard=True)
             if not domain:
                 continue
@@ -332,12 +370,14 @@ def build_opengraph_nodes(results, search_term, search_depth, blacklist_entries)
             ),
         )
 
+    if not search_date:
+        search_date = datetime.utcnow().date().isoformat()
     search_node = Node(
         id=f"search:{{{search_term}}}",
         kinds=["Search"],
         properties=Properties(
             search=search_term,
-            search_date=datetime.utcnow().date().isoformat(),
+            search_date=search_date,
             search_depth=str(search_depth),
             is_recursive=str(search_depth != 0),
             blacklisted_elements=blacklist_entries,
@@ -345,14 +385,27 @@ def build_opengraph_nodes(results, search_term, search_depth, blacklist_entries)
     )
 
     for node in issuer_nodes.values():
-        graph.addNode(node)
+        graph.add_node(node)
     for node in cert_nodes.values():
-        graph.addNode(node)
+        graph.add_node(node)
     for node in domain_nodes.values():
-        graph.addNode(node)
-    graph.addNode(search_node)
+        graph.add_node(node)
+    graph.add_node(search_node)
 
     edge_keys = set()
+    for domain in domain_nodes:
+        end_node_id = domain_nodes[domain].id
+        key = (search_node.id, end_node_id, "Discovered")
+        if key in edge_keys:
+            continue
+        graph.add_edge(
+            Edge(
+                start_node=search_node.id,
+                end_node=end_node_id,
+                kind="Discovered",
+            )
+        )
+        edge_keys.add(key)
     for entry in results:
         cert_id = entry.get("id")
         if cert_id is None:
@@ -363,7 +416,7 @@ def build_opengraph_nodes(results, search_term, search_depth, blacklist_entries)
             issuer_node_id = str(issuer_id)
             key = (issuer_node_id, cert_node_id, "Issued")
             if key not in edge_keys:
-                graph.addEdge(
+                graph.add_edge(
                     Edge(
                         start_node=issuer_node_id,
                         end_node=cert_node_id,
@@ -373,29 +426,29 @@ def build_opengraph_nodes(results, search_term, search_depth, blacklist_entries)
                 edge_keys.add(key)
         cn_domain = normalize_domain(entry.get("common_name") or "", keep_wildcard=True)
         if cn_domain and cn_domain in domain_nodes:
-            key = (cn_domain, cert_node_id, "IsCommonName")
+            key = (cert_node_id, cn_domain, "IsCommonName")
             if key not in edge_keys:
-                graph.addEdge(
+                graph.add_edge(
                     Edge(
-                        start_node=cn_domain,
-                        end_node=cert_node_id,
+                        start_node=cert_node_id,
+                        end_node=cn_domain,
                         kind="IsCommonName",
                     )
                 )
                 edge_keys.add(key)
         name_value = entry.get("name_value") or ""
-        for item in name_value.split():
+        for item in name_value.splitlines():
             san_domain = normalize_domain(item, keep_wildcard=True)
             if not san_domain or san_domain not in domain_nodes:
                 continue
-            key = (san_domain, cert_node_id, "IsSAN")
+            key = (cert_node_id, san_domain, "IsInSAN")
             if key in edge_keys:
                 continue
-            graph.addEdge(
+            graph.add_edge(
                 Edge(
-                    start_node=san_domain,
-                    end_node=cert_node_id,
-                    kind="IsSAN",
+                    start_node=cert_node_id,
+                    end_node=san_domain,
+                    kind="IsInSAN",
                 )
             )
             edge_keys.add(key)
@@ -621,7 +674,7 @@ def main():
     )
     parser.add_argument(
         "domain",
-        help="Domain name to query (e.g. example.com). Used as root for recursion.",
+        help="Domain name to query (e.g. example.com) or keyword (e.g. \"google\"). Used as root for recursion.",
     )
     parser.add_argument(
         "--recursive",
@@ -670,11 +723,22 @@ def main():
         ),
     )
     parser.add_argument(
+        "--input-data",
+        help=(
+            "Read compiled cert data from this path (required with --offline)."
+        ),
+    )
+    parser.add_argument(
         "--opengraph-output",
         help=(
             "Write OpenGraph output to this path "
             "(default: alongside compiled data, with _opengraph.json suffix)."
         ),
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Do not query crt.sh; requires --input-data to generate OpenGraph.",
     )
     parser.add_argument(
         "--timeout",
@@ -738,70 +802,116 @@ def main():
             f"DiskWrite={not args.no_disk_write}.",
             args.verbose,
         )
-        if is_blacklisted(args.domain, blacklist_patterns):
-            log_message(
-                f"[!] Root domain {args.domain} is blacklisted. Nothing to do.",
-                True,
-                force=True,
-            )
-            return 0
-        if args.recursive:
-            if args.no_disk_write:
+        search_term = args.domain
+        search_date = None
+        search_depth_override = None
+        if args.offline:
+            if not args.input_data:
                 log_message(
-                    "[!] --no-disk-write disables resume and caching functionnalities.",
+                    "[!] --offline requires --input-data pointing to a compiled data file.",
                     True,
                     force=True,
                 )
-            results = fetch_recursive(
-                args.domain,
-                args.depth,
-                args.timeout,
-                args.retries,
-                throttle,
+                return 1
+            compiled_path = args.input_data
+            results, meta = load_compiled_data(compiled_path, args.verbose)
+            if results is None:
+                return 1
+            if meta:
+                blacklist_entries = meta.get("blacklisted_elements", blacklist_entries)
+                search_term = meta.get("search", search_term)
+                search_date = meta.get("search_date", None)
+                if meta.get("search_depth") is not None:
+                    try:
+                        search_depth_override = int(meta.get("search_depth"))
+                        args.depth = search_depth_override
+                    except (TypeError, ValueError):
+                        pass
+            log_message(
+                f"[*] Offline mode: loaded {len(results)} entries from {compiled_path}.",
                 args.verbose,
-                state_path(cache_dir, args.domain),
-                cache_dir,
-                args.no_disk_write,
-                args.force_data_refresh,
-                blacklist_patterns,
             )
         else:
-            results, _from_cache = fetch_crtsh(
-                args.domain,
-                args.timeout,
-                args.retries,
-                throttle,
-                args.verbose,
-                cache_dir,
-                args.no_disk_write,
-                args.force_data_refresh,
-                blacklist_patterns,
-            )
+            if is_blacklisted(args.domain, blacklist_patterns):
+                log_message(
+                    f"[!] Root domain {args.domain} is blacklisted. Nothing to do.",
+                    True,
+                    force=True,
+                )
+                return 0
+            if args.recursive:
+                if args.no_disk_write:
+                    log_message(
+                        "[!] --no-disk-write disables resume and caching functionnalities.",
+                        True,
+                        force=True,
+                    )
+                results = fetch_recursive(
+                    args.domain,
+                    args.depth,
+                    args.timeout,
+                    args.retries,
+                    throttle,
+                    args.verbose,
+                    state_path(cache_dir, args.domain),
+                    cache_dir,
+                    args.no_disk_write,
+                    args.force_data_refresh,
+                    blacklist_patterns,
+                )
+            else:
+                results, _from_cache = fetch_crtsh(
+                    args.domain,
+                    args.timeout,
+                    args.retries,
+                    throttle,
+                    args.verbose,
+                    cache_dir,
+                    args.no_disk_write,
+                    args.force_data_refresh,
+                    blacklist_patterns,
+                )
     except Exception as exc:
         log_message(f"[!] Failed to query crt.sh: {exc}", True, force=True)
         return 1
 
     log_message(f"[*] Retrieved {len(results)} certificate entries.", args.verbose)
 
-    write_compiled_data(
-        args.domain, results, args.output_data, args.verbose, args.no_disk_write
-    )
+    search_depth = 0
+    if args.recursive:
+        search_depth = args.depth if args.depth is not None else -1
+    if args.offline and search_depth_override is not None:
+        search_depth = search_depth_override
+    metadata = {
+        "search": search_term,
+        "search_date": datetime.utcnow().date().isoformat(),
+        "search_depth": search_depth,
+        "is_recursive": search_depth != 0,
+        "blacklisted_elements": blacklist_entries,
+    }
+    if not args.offline:
+        write_compiled_data(
+            args.domain,
+            results,
+            args.output_data,
+            args.verbose,
+            args.no_disk_write,
+            metadata,
+        )
 
     if not args.no_disk_write:
-        search_depth = 0
-        if args.recursive:
-            search_depth = args.depth if args.depth is not None else -1
         og_path = args.opengraph_output or opengraph_output_path(
             args.domain, args.output_data
         )
         graph = build_opengraph_nodes(
             results,
-            args.domain,
+            search_term,
             search_depth,
             blacklist_entries,
+            search_date=search_date,
         )
         if graph is not None:
-            graph.exportToFile(og_path)
+            graph.export_to_file(og_path)
             log_message(f"[*] OpenGraph written to {og_path}.", args.verbose)
 
     if args.subdomain_discovery:
