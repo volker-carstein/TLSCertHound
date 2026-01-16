@@ -362,7 +362,7 @@ def build_opengraph_nodes(
     for domain, flags in domain_flags.items():
         domain_nodes[domain] = Node(
             id=domain,
-            kinds=["Domain"],
+            kinds=["WebDomainName"],
             properties=Properties(
                 fqdn=domain,
                 is_cn=str(flags["is_cn"]),
