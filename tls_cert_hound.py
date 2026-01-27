@@ -17,7 +17,7 @@ COLOR_ENABLED = True
 
 def banner_text():
     return (
-        """
+        r"""
  _____ _      _____     _____           _       _   _                       _ 
 |_   _| |    /  ___|   /  __ \         | |     | | | |                     | |
   | | | |    \ `--.    | /  \/ ___ _ __| |_    | |_| | ___  _   _ _ __   __| |
@@ -52,48 +52,51 @@ class ThrottleController:
         self.auto = auto
         self.verbose = verbose
         self.success_streak = 0
-        self.last_request_time = None
+        self.next_allowed_time = None
 
     def wait(self, force: bool = False):
         if self.delay <= 0:
             return
         now = time.time()
-        if self.last_request_time is not None:
-            remaining = self.delay - (now - self.last_request_time)
-            if remaining > 0:
-                log_message(
-                    f"[*] Throttling: sleeping {remaining:.2f}s before next request.",
-                    self.verbose,
-                    force=force,
-                )
-                time.sleep(remaining)
-        self.last_request_time = time.time()
+        if self.next_allowed_time is None:
+            self.next_allowed_time = now
+        remaining = self.next_allowed_time - now
+        if remaining > 0:
+            log_message(
+                f"[*] Throttling: sleeping {remaining:.2f}s before next request.",
+                self.verbose,
+                force=force,
+            )
+            time.sleep(remaining)
+        self.next_allowed_time = time.time() + self.delay
 
     def record_success(self):
         if not self.auto:
             return
         self.success_streak += 1
         if self.success_streak >= 5 and self.delay > 0:
-            old_delay = self.delay
             self.delay = max(self.delay / 2.0, 0.1)
             self.success_streak = 0
-            if old_delay != self.delay:
-                log_message(
-                    f"[*] Auto-throttle: 5 successful requests, delay now {self.delay:.2f}s.",
-                    self.verbose,
-                    force=True,
-                )
+            log_message(
+                f"[*] Auto-throttle: 5 successful requests, delay now {self.delay:.2f}s.",
+                self.verbose,
+                force=True,
+            )
+            if self.next_allowed_time is not None:
+                self.next_allowed_time = time.time() + self.delay
 
-    def record_503(self):
+    def record_5XX(self, code : int):
         if not self.auto:
             return
-        self.delay = max(self.delay * 3.0, 0.1)
+        factor = 10.0 if self.delay < 0.5 else 3.0
+        self.delay = max(self.delay * factor, 0.1)
         self.success_streak = 0
         log_message(
-            f"[!] Auto-throttle: HTTP 503 received, delay now {self.delay:.2f}s.",
+            f"[!] Auto-throttle: HTTP {code} received, delay now {self.delay:.2f}s.",
             self.verbose,
             force=True,
         )
+        self.next_allowed_time = time.time() + self.delay
 
     def snapshot(self):
         return {
@@ -160,7 +163,8 @@ def write_cache(
 
 
 def data_output_path(domain: str):
-    safe = "".join(ch if ch.isalnum() else "_" for ch in domain.lower())
+    base = domain or "multi"
+    safe = "".join(ch if ch.isalnum() else "_" for ch in base.lower())
     filename = f"{safe}_all_cert_data.json"
     return os.path.join(".tls_cert_hound_data", safe, filename)
 
@@ -301,9 +305,7 @@ def opengraph_output_path(domain: str, output_data_path: str):
     return f"{base_path}.opengraph.json"
 
 
-def build_opengraph_nodes(
-    results, search_term, search_depth, blacklist_entries, search_date=None
-):
+def build_opengraph_nodes(results, searches, blacklist_entries):
     try:
         from bhopengraph import OpenGraph, Node, Properties, Edge
     except Exception as exc:
@@ -369,20 +371,25 @@ def build_opengraph_nodes(
                 is_san=str(flags["is_san"]),
             ),
         )
+    extra_domains = set()
+    for search in searches:
+        for domain in search.get("discovered_domains", []):
+            extra_domains.add(domain)
+    for domain in extra_domains:
+        if domain in domain_nodes:
+            continue
+        domain_nodes[domain] = Node(
+            id=domain,
+            kinds=["WebDomainName"],
+            properties=Properties(
+                fqdn=domain,
+                is_cn="False",
+                is_san="False",
+            ),
+        )
 
-    if not search_date:
-        search_date = datetime.utcnow().date().isoformat()
-    search_node = Node(
-        id=f"search:{{{search_term}}}",
-        kinds=["Search"],
-        properties=Properties(
-            search=search_term,
-            search_date=search_date,
-            search_depth=str(search_depth),
-            is_recursive=str(search_depth != 0),
-            blacklisted_elements=blacklist_entries,
-        ),
-    )
+    if searches is None:
+        searches = []
 
     for node in issuer_nodes.values():
         graph.add_node(node)
@@ -390,22 +397,39 @@ def build_opengraph_nodes(
         graph.add_node(node)
     for node in domain_nodes.values():
         graph.add_node(node)
-    graph.add_node(search_node)
 
     edge_keys = set()
-    for domain in domain_nodes:
-        end_node_id = domain_nodes[domain].id
-        key = (search_node.id, end_node_id, "Discovered")
-        if key in edge_keys:
-            continue
-        graph.add_edge(
-            Edge(
-                start_node=search_node.id,
-                end_node=end_node_id,
-                kind="Discovered",
-            )
+    for search in searches:
+        search_term = search.get("search", "")
+        search_date = search.get("search_date") or datetime.utcnow().date().isoformat()
+        search_depth = search.get("search_depth", 0)
+        search_node = Node(
+            id=f"search:{{{search_term}}}",
+            kinds=["Search"],
+            properties=Properties(
+                search=search_term,
+                search_date=search_date,
+                search_depth=str(search_depth),
+                is_recursive=str(search_depth != 0),
+                blacklisted_elements=blacklist_entries,
+            ),
         )
-        edge_keys.add(key)
+        graph.add_node(search_node)
+        for domain in search.get("discovered_domains", []):
+            if domain not in domain_nodes:
+                continue
+            end_node_id = domain_nodes[domain].id
+            key = (search_node.id, end_node_id, "Discovered")
+            if key in edge_keys:
+                continue
+            graph.add_edge(
+                Edge(
+                    start_node=search_node.id,
+                    end_node=end_node_id,
+                    kind="Discovered",
+                )
+            )
+            edge_keys.add(key)
     for entry in results:
         cert_id = entry.get("id")
         if cert_id is None:
@@ -501,9 +525,8 @@ def fetch_crtsh(
             write_cache(domain, results, cache_dir, verbose, no_disk_write)
             return results, False
         except urllib.error.HTTPError as exc:
-            if exc.code == 503 and throttle is not None:
-                throttle.record_503()
-                throttle.wait(force=True)
+            if exc.code >= 500 and exc.code < 600 and throttle is not None:
+                throttle.record_5XX(exc.code)
             attempt += 1
             if attempt > retries:
                 raise exc
@@ -527,6 +550,7 @@ def normalize_domain(value: str, keep_wildcard: bool = False):
     if not value:
         return None
     domain = value.strip().lower()
+    domain = domain.rstrip(".)$,;")
     if domain.startswith("*.") and not keep_wildcard:
         domain = domain[2:]
     if "." not in domain:
@@ -548,6 +572,27 @@ def extract_domains(entry):
     return domains
 
 
+def load_domain_list(path: str, verbose: bool):
+    domains = []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                domain = normalize_domain(raw, keep_wildcard=False)
+                if domain:
+                    domains.append(domain)
+                else:
+                    log_message(
+                        f"[!] Skipping invalid domain in input file: {raw}",
+                        verbose,
+                    )
+    except FileNotFoundError:
+        log_message(f"[!] Input file not found: {path}.", True, force=True)
+    return domains
+
+
 def fetch_recursive(
     domain: str,
     max_depth,
@@ -561,6 +606,8 @@ def fetch_recursive(
     force_data_refresh: bool,
     blacklist_patterns,
 ):
+    if not no_disk_write:
+        os.makedirs(cache_dir, exist_ok=True)
     state = None if no_disk_write else load_state(state_file)
     seen = set()
     queue = [(domain, 0)]
@@ -674,6 +721,8 @@ def main():
     )
     parser.add_argument(
         "domain",
+        nargs="?",
+        default=None,
         help="Domain name to query (e.g. example.com) or keyword (e.g. \"google\"). Used as root for recursion.",
     )
     parser.add_argument(
@@ -741,6 +790,15 @@ def main():
         help="Do not query crt.sh; requires --input-data to generate OpenGraph.",
     )
     parser.add_argument(
+        "--domain-file",
+        help="Read a list of domains (one per line) instead of a single domain.",
+    )
+    parser.add_argument(
+        "--show-result",
+        action="store_true",
+        help="Use saved state file to generate outputs without new queries.",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=30.0,
@@ -794,17 +852,50 @@ def main():
         )
         if args.blacklist_file and not blacklist_patterns:
             log_message("[!] No valid blacklist entries loaded.", True, force=True)
-        cache_dir = cache_dir_path(args.domain)
+        if not args.domain and not args.domain_file:
+            log_message(
+                "[!] Either a domain argument or --domain-file is required.",
+                True,
+                force=True,
+            )
+            return 1
+        domains = [args.domain] if args.domain else []
+        if args.domain_file:
+            domains = load_domain_list(args.domain_file, args.verbose)
+            if not domains:
+                log_message(
+                    "[!] No domains found in --domain-file.",
+                    True,
+                    force=True,
+                )
+                return 1
+        if args.offline and args.domain_file:
+            log_message(
+                "[!] --offline cannot be combined with --domain-file.",
+                True,
+                force=True,
+            )
+            return 1
+        all_results = []
+        seen_cert_keys = set()
+        searches = []
+        all_discovered = set()
         log_message(
-            f"[*] Starting run for {args.domain}. Recursive={args.recursive}, "
+            f"[*] Starting run for {', '.join(domains)}. Recursive={args.recursive}, "
             f"Depth={args.depth}, Timeout={args.timeout}s, Retries={args.retries}, "
             f"Throttle={args.throttle}s, AutoThrottle={not args.no_auto_throttle}, "
             f"DiskWrite={not args.no_disk_write}.",
             args.verbose,
         )
-        search_term = args.domain
         search_date = None
         search_depth_override = None
+        if args.show_result and args.offline:
+            log_message(
+                "[!] --show-result cannot be combined with --offline.",
+                True,
+                force=True,
+            )
+            return 1
         if args.offline:
             if not args.input_data:
                 log_message(
@@ -819,58 +910,90 @@ def main():
                 return 1
             if meta:
                 blacklist_entries = meta.get("blacklisted_elements", blacklist_entries)
-                search_term = meta.get("search", search_term)
-                search_date = meta.get("search_date", None)
-                if meta.get("search_depth") is not None:
-                    try:
-                        search_depth_override = int(meta.get("search_depth"))
-                        args.depth = search_depth_override
-                    except (TypeError, ValueError):
-                        pass
+                searches = meta.get("searches", [])
+                if not searches and "search" in meta:
+                    searches = [
+                        {
+                            "search": meta.get("search"),
+                            "search_date": meta.get("search_date"),
+                            "search_depth": meta.get("search_depth", 0),
+                            "is_recursive": meta.get("is_recursive", False),
+                            "discovered_domains": meta.get("discovered_domains", []),
+                        }
+                    ]
             log_message(
                 f"[*] Offline mode: loaded {len(results)} entries from {compiled_path}.",
                 args.verbose,
             )
+            all_results = results
         else:
-            if is_blacklisted(args.domain, blacklist_patterns):
+            if args.no_disk_write:
                 log_message(
-                    f"[!] Root domain {args.domain} is blacklisted. Nothing to do.",
+                    "[!] --no-disk-write disables resume and caching functionnalities.",
                     True,
                     force=True,
                 )
-                return 0
-            if args.recursive:
-                if args.no_disk_write:
+            for domain in domains:
+                if is_blacklisted(domain, blacklist_patterns):
                     log_message(
-                        "[!] --no-disk-write disables resume and caching functionnalities.",
+                        f"[!] Root domain {domain} is blacklisted. Skipping.",
                         True,
                         force=True,
                     )
-                results = fetch_recursive(
-                    args.domain,
-                    args.depth,
-                    args.timeout,
-                    args.retries,
-                    throttle,
-                    args.verbose,
-                    state_path(cache_dir, args.domain),
-                    cache_dir,
-                    args.no_disk_write,
-                    args.force_data_refresh,
-                    blacklist_patterns,
+                    continue
+                cache_dir = cache_dir_path(domain)
+                if args.recursive:
+                    results = fetch_recursive(
+                        domain,
+                        args.depth,
+                        args.timeout,
+                        args.retries,
+                        throttle,
+                        args.verbose,
+                        state_path(cache_dir, domain),
+                        cache_dir,
+                        args.no_disk_write,
+                        args.force_data_refresh,
+                        blacklist_patterns,
+                    )
+                else:
+                    results, _from_cache = fetch_crtsh(
+                        domain,
+                        args.timeout,
+                        args.retries,
+                        throttle,
+                        args.verbose,
+                        cache_dir,
+                        args.no_disk_write,
+                        args.force_data_refresh,
+                        blacklist_patterns,
+                    )
+                discovered = set()
+                for entry in results:
+                    for d in extract_domains(entry):
+                        if not is_blacklisted(d, blacklist_patterns):
+                            discovered.add(d)
+                discovered.add(domain.lower())
+                search_depth = 0
+                if args.recursive:
+                    search_depth = args.depth if args.depth is not None else -1
+                searches.append(
+                    {
+                        "search": domain,
+                        "search_date": datetime.utcnow().date().isoformat(),
+                        "search_depth": search_depth,
+                        "is_recursive": search_depth != 0,
+                        "discovered_domains": sorted(discovered),
+                    }
                 )
-            else:
-                results, _from_cache = fetch_crtsh(
-                    args.domain,
-                    args.timeout,
-                    args.retries,
-                    throttle,
-                    args.verbose,
-                    cache_dir,
-                    args.no_disk_write,
-                    args.force_data_refresh,
-                    blacklist_patterns,
-                )
+                all_discovered.update(discovered)
+                for entry in results:
+                    key = cert_key(entry)
+                    if key in seen_cert_keys:
+                        continue
+                    seen_cert_keys.add(key)
+                    all_results.append(entry)
+            results = all_results
     except Exception as exc:
         log_message(f"[!] Failed to query crt.sh: {exc}", True, force=True)
         return 1
@@ -882,11 +1005,18 @@ def main():
         search_depth = args.depth if args.depth is not None else -1
     if args.offline and search_depth_override is not None:
         search_depth = search_depth_override
+    if not searches:
+        searches = [
+            {
+                "search": search_term,
+                "search_date": datetime.utcnow().date().isoformat(),
+                "search_depth": search_depth,
+                "is_recursive": search_depth != 0,
+                "discovered_domains": sorted(all_discovered) if all_discovered else [],
+            }
+        ]
     metadata = {
-        "search": search_term,
-        "search_date": datetime.utcnow().date().isoformat(),
-        "search_depth": search_depth,
-        "is_recursive": search_depth != 0,
+        "searches": searches,
         "blacklisted_elements": blacklist_entries,
     }
     if not args.offline:
@@ -905,13 +1035,21 @@ def main():
         )
         graph = build_opengraph_nodes(
             results,
-            search_term,
-            search_depth,
+            searches,
             blacklist_entries,
-            search_date=search_date,
         )
         if graph is not None:
-            graph.export_to_file(og_path)
+            export_fn = getattr(graph, "exportToFile", None)
+            if export_fn is None:
+                export_fn = getattr(graph, "export_to_file", None)
+            if export_fn is None:
+                log_message(
+                    "[!] OpenGraph export method not found on graph object.",
+                    True,
+                    force=True,
+                )
+                return 1
+            export_fn(og_path)
             log_message(f"[*] OpenGraph written to {og_path}.", args.verbose)
 
     if args.subdomain_discovery:
@@ -920,7 +1058,11 @@ def main():
             for domain in extract_domains(entry):
                 if not is_blacklisted(domain, blacklist_patterns):
                     discovered.add(domain)
-        discovered.add(args.domain.lower())
+        for search in searches:
+            for domain in search.get("discovered_domains", []):
+                discovered.add(domain)
+        if args.domain:
+            discovered.add(args.domain.lower())
         for name in sorted(discovered):
             print(name)
         return 0
