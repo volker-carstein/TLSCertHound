@@ -1,2 +1,4 @@
 .tls_cert_hound_cache/
 .tls_cert_hound_data/
+RELEASE_CHECKLIST.md
+dist/
