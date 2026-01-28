@@ -2,20 +2,20 @@
 
 TLSCertHound is a crt.sh collector focused on large-scale domain discovery from TLS
 certificates. It supports recursive expansion, cache-backed resumable runs, and
-OpenGraph export for BloodHound CE using the `bhopengraph` library.
+OpenGraph export for BloodHound CE using the [bhopengraph](https://github.com/p0dalirius/bhopengraph) library.
 
 Feel free to open issues if anything doesn't work (PR are more than welcome as well!)
 
 ## Features
 
-- Query crt.sh for certificates related to a domain or keyword.
+- Query [crt.sh](https://crt.sh) for certificates related to a domain or keyword.
 - Recursive subdomain discovery with optional depth limit.
 - Automatic throttling that adapts to HTTP 5xx responses.
-- Resumable runs (state persisted per domain).
-- Cache reuse and offline OpenGraph generation.
-- Multi-domain runs from a file with a single combined output.
-- OpenGraph export with Search, TLSCertificate, CA, and domain nodes.
-- Blacklist support (simple patterns with `^`, `$`, and `*`).
+- Resumable runs (state persisted per domain) with `--show-result` to generate outputs from saved state/cache without querying.
+- Cache reuse and offline OpenGraph generation with `--offline` and `--input-data`.
+- Multi-domain runs from a file with a single combined output with `--domain-file`.
+- OpenGraph export with Search, TLSCertificate, CA, and domain nodes with `--opengraph-output`.
+- Blacklist support (simple patterns with `^`, `$`, and `*`) with `--blacklist-file`.
 
 ## Installation
 
@@ -31,38 +31,37 @@ From source using requirements.txt:
 pip install -r requirements.txt
 ```
 
-This installs the `tls_cert_hound` console script and the `bhopengraph`
-dependency.
+This installs the `tls_cert_hound` console script and the [bhopengraph](https://github.com/p0dalirius/bhopengraph) dependency.
 
 ## Quick start
 
-Single domain:
+### Single domain:
 
-```
+```bash
 tls_cert_hound example.com
 ```
 
-Recursive discovery (unlimited depth):
+### Recursive discovery (unlimited depth):
 
-```
+```bash
 tls_cert_hound example.com --recursive
 ```
 
-Recursive with depth 3:
+### Recursive with depth 3:
 
-```
+```bash
 tls_cert_hound example.com --recursive --depth 3
 ```
 
-Multi-domain from file:
+### Multi-domain from file:
 
-```
+```bash
 tls_cert_hound --domain-file domains.txt --recursive --depth 2
 ```
 
-Generate OpenGraph only (offline mode):
+### Generate OpenGraph only (offline mode):
 
-```
+```bash
 tls_cert_hound --offline --input-data .tls_cert_hound_data/example.com/example.com_all_cert_data.json
 ```
 
@@ -77,15 +76,15 @@ tls_cert_hound --offline --input-data .tls_cert_hound_data/example.com/example.c
 
 ### Compiled data
 
-Single-domain default:
+#### Single-domain default:
 
-```
+```bash
 .tls_cert_hound_data/<domain>/<domain>_all_cert_data.json
 ```
 
-Multi-domain default (domain file named `domain_list.txt`):
+#### Multi-domain default (domain file named `domain_list.txt`):
 
-```
+```bash
 .tls_cert_hound_data/domain_list_results/domain_list_all_cert_data.json
 ```
 
@@ -95,7 +94,7 @@ Override with `--output-data`.
 
 By default, OpenGraph output is placed alongside result data:
 
-```
+```bash
 .tls_cert_hound_data/<domain|domain file name>/<domain|domain file name>_opengraph.json
 ```
 
@@ -103,14 +102,14 @@ Override with `--opengraph-output`.
 
 ## OpenGraph model
 
-Nodes:
+### Nodes:
 
 - `CertIssuerCA`
 - `TLSCertificate`
 - `WebDomainName`
 - `Search`
 
-Edges:
+### Edges:
 
 - `Issued` (CA -> TLSCertificate)
 - `IsCommonName` (TLSCertificate -> WebDomainName)
@@ -141,33 +140,60 @@ included in results or OpenGraph output.
 ## CLI reference
 
 ```
-usage: tls_cert_hound [domain] [options]
+$ python3 ./tls_cert_hound.py -h
+usage: tls_cert_hound.py [-h] [--recursive] [--depth DEPTH] [--no-disk-write] [--blacklist-file BLACKLIST_FILE] [--force-data-refresh]
+                         [--input-data INPUT_DATA] [--offline] [--domain-file DOMAIN_FILE] [--show-result] [--ignore-state]
+                         [--throttle THROTTLE] [--no-auto-throttle] [--timeout TIMEOUT] [--retries RETRIES]
+                         [--opengraph-output OPENGRAPH_OUTPUT] [--subdomain-discovery] [--verbose] [--pretty] [--no-colorized-output]
+                         [--no-banner] [--output-data OUTPUT_DATA]
+                         [domain]
+
+Query crt.sh for certificates related to a domain. Supports recursive subdomain discovery, adaptive throttling, and resumable runs.
 
 positional arguments:
-  domain                  Domain name to query (e.g. example.com) or keyword.
+  domain                Domain name to query (e.g. example.com) or keyword (e.g. "google"). Used as root for recursion.
 
 options:
-  --domain-file FILE      Read domains from file (one per line).
-  --recursive             Enable recursive subdomain discovery.
-  --depth N               Max recursion depth (default: unlimited).
-  --throttle SECONDS      Initial delay between requests (default: 1.0).
-  --no-auto-throttle      Disable adaptive throttling on HTTP 5xx responses.
-  --timeout SECONDS       HTTP timeout per request (default: 30).
-  --retries N             Retry count for temporary errors (default: 2).
-  --blacklist-file FILE   Skip domains matching entries in blacklist file.
-  --force-data-refresh    Ignore cached JSON and re-fetch from crt.sh.
-  --ignore-state          Ignore saved state files but keep cache reuse.
-  --show-result           Generate outputs from saved state/cache only.
-  --output-data PATH      Override compiled data output path.
-  --input-data PATH       Compiled data input (required with --offline).
-  --opengraph-output PATH Override OpenGraph output path.
-  --offline               No crt.sh queries; uses --input-data.
-  --subdomain-discovery   Output discovered domain names only.
-  --pretty                Pretty-print JSON output.
-  --no-disk-write         Disable cache/state/data/OpenGraph writes.
-  --no-colorized-output   Disable ANSI colors.
-  --no-banner             Disable ASCII banner.
-  --verbose               Verbose logs.
+  -h, --help            show this help message and exit
+
+Advanced options:
+  --recursive           Enable recursive subdomain discovery from certificate data.
+  --depth DEPTH         Max recursion depth when --recursive is set (default: unlimited).
+
+Advanced options:
+  --no-disk-write       Disable saving state, cache, compiled data, and OpenGraph outputs.
+  --blacklist-file BLACKLIST_FILE
+                        Path to a blacklist file with domains or simple patterns (supports only ^, $, and *). Matching domains are skipped.
+  --force-data-refresh  Ignore cached per-domain JSON and re-fetch from crt.sh.
+  --input-data INPUT_DATA
+                        Read compiled cert data from this path (required with --offline).
+  --offline             Do not query crt.sh; requires --input-data to generate OpenGraph.
+  --domain-file DOMAIN_FILE
+                        Read a list of domains (one per line) instead of a single domain. Empty lines and comments (#) are ignored.
+
+Saved state options:
+  --show-result         Use saved state file to generate outputs without new queries.
+  --ignore-state        Ignore saved state files but still use cached JSON responses.
+
+Requests options:
+  --throttle THROTTLE   Initial seconds between requests (default: 1.0).
+  --no-auto-throttle    Disable adaptive throttling on HTTP 5xx responses.
+  --timeout TIMEOUT     HTTP timeout in seconds for each request (default: 30).
+  --retries RETRIES     Retry count for timeouts/temporary errors (default: 2).
+
+Output options:
+  --opengraph-output OPENGRAPH_OUTPUT
+                        Write OpenGraph output to this path (default: alongside compiled data, with _opengraph.json suffix).
+  --subdomain-discovery
+                        Output only discovered domain names, one per line.
+  --verbose             Enable verbose progress logging to stderr.
+  --pretty              Pretty-print JSON output instead of JSONL.
+  --no-colorized-output
+                        Disable ANSI color output in status messages.
+  --no-banner           Disable the startup ASCII banner.
+  --output-data OUTPUT_DATA
+                        Write compiled cert data to this path (default: .tls_cert_hound_data/<domain>/<domain>_all_cert_data.json or
+                        .tls_cert_hound_data/<domain_file>_results/<domain_file>_all_cert_data.json when --domain-file is used).
 ```
 
 ## Notes
@@ -178,4 +204,4 @@ options:
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).

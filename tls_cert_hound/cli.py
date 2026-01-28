@@ -33,46 +33,129 @@ def main():
         default=None,
         help="Domain name to query (e.g. example.com) or keyword (e.g. \"google\"). Used as root for recursion.",
     )
-    parser.add_argument(
+
+
+    group = parser.add_argument_group("Advanced options")
+    group.add_argument(
         "--recursive",
         action="store_true",
         help="Enable recursive subdomain discovery from certificate data.",
     )
-    parser.add_argument(
+    group.add_argument(
         "--depth",
         type=int,
         default=None,
         help="Max recursion depth when --recursive is set (default: unlimited).",
     )
-    parser.add_argument(
-        "--throttle",
-        type=float,
-        default=1.0,
-        help="Initial seconds between requests (default: 1.0).",
-    )
-    parser.add_argument(
-        "--no-auto-throttle",
-        action="store_true",
-        help="Disable adaptive throttling on HTTP 5xx responses.",
-    )
-    parser.add_argument(
+
+    group_advanced_options = parser.add_argument_group("Advanced options")
+    group_advanced_options.add_argument(
         "--no-disk-write",
         action="store_true",
         help="Disable saving state, cache, compiled data, and OpenGraph outputs.",
     )
-    parser.add_argument(
+    group_advanced_options.add_argument(
         "--blacklist-file",
         help=(
             "Path to a blacklist file with domains or simple patterns "
             "(supports only ^, $, and *). Matching domains are skipped."
         ),
     )
-    parser.add_argument(
+    group_advanced_options.add_argument(
         "--force-data-refresh",
         action="store_true",
         help="Ignore cached per-domain JSON and re-fetch from crt.sh.",
     )
-    parser.add_argument(
+    group_advanced_options.add_argument(
+        "--input-data",
+        help=(
+            "Read compiled cert data from this path (required with --offline)."
+        ),
+    )
+    group_advanced_options.add_argument(
+        "--offline",
+        action="store_true",
+        help="Do not query crt.sh; requires --input-data to generate OpenGraph.",
+    )
+    group_advanced_options.add_argument(
+        "--domain-file",
+        help=(
+            "Read a list of domains (one per line) instead of a single domain. "
+            "Empty lines and comments (#) are ignored."
+        ),
+    )
+
+    group_saved_state = parser.add_argument_group("Saved state options")
+    group_saved_state.add_argument(
+        "--show-result",
+        action="store_true",
+        help="Use saved state file to generate outputs without new queries.",
+    )
+    group_saved_state.add_argument(
+        "--ignore-state",
+        action="store_true",
+        help="Ignore saved state files but still use cached JSON responses.",
+    )
+
+    group_requests = parser.add_argument_group("Requests options")
+    group_requests.add_argument(
+        "--throttle",
+        type=float,
+        default=1.0,
+        help="Initial seconds between requests (default: 1.0).",
+    )
+    group_requests.add_argument(
+        "--no-auto-throttle",
+        action="store_true",
+        help="Disable adaptive throttling on HTTP 5xx responses.",
+    )
+    group_requests.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="HTTP timeout in seconds for each request (default: 30).",
+    )
+    group_requests.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="Retry count for timeouts/temporary errors (default: 2).",
+    )
+
+    group_output = parser.add_argument_group("Output options")
+    group_output.add_argument(
+        "--opengraph-output",
+        help=(
+            "Write OpenGraph output to this path "
+            "(default: alongside compiled data, with _opengraph.json suffix)."
+        ),
+    )
+    group_output.add_argument(
+        "--subdomain-discovery",
+        action="store_true",
+        help="Output only discovered domain names, one per line.",
+    )
+    group_output.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose progress logging to stderr.",
+    )
+    group_output.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Pretty-print JSON output instead of JSONL.",
+    )
+    group_output.add_argument(
+        "--no-colorized-output",
+        action="store_true",
+        help="Disable ANSI color output in status messages.",
+    )
+    group_output.add_argument(
+        "--no-banner",
+        action="store_true",
+        help="Disable the startup ASCII banner.",
+    )
+    group_output.add_argument(
         "--output-data",
         help=(
             "Write compiled cert data to this path "
@@ -81,78 +164,7 @@ def main():
             "when --domain-file is used)."
         ),
     )
-    parser.add_argument(
-        "--input-data",
-        help=(
-            "Read compiled cert data from this path (required with --offline)."
-        ),
-    )
-    parser.add_argument(
-        "--opengraph-output",
-        help=(
-            "Write OpenGraph output to this path "
-            "(default: alongside compiled data, with _opengraph.json suffix)."
-        ),
-    )
-    parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="Do not query crt.sh; requires --input-data to generate OpenGraph.",
-    )
-    parser.add_argument(
-        "--domain-file",
-        help=(
-            "Read a list of domains (one per line) instead of a single domain. "
-            "Empty lines and comments (#) are ignored."
-        ),
-    )
-    parser.add_argument(
-        "--show-result",
-        action="store_true",
-        help="Use saved state file to generate outputs without new queries.",
-    )
-    parser.add_argument(
-        "--ignore-state",
-        action="store_true",
-        help="Ignore saved state files but still use cached JSON responses.",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=30.0,
-        help="HTTP timeout in seconds for each request (default: 30).",
-    )
-    parser.add_argument(
-        "--retries",
-        type=int,
-        default=2,
-        help="Retry count for timeouts/temporary errors (default: 2).",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose progress logging to stderr.",
-    )
-    parser.add_argument(
-        "--pretty",
-        action="store_true",
-        help="Pretty-print JSON output instead of JSONL.",
-    )
-    parser.add_argument(
-        "--subdomain-discovery",
-        action="store_true",
-        help="Output only discovered domain names, one per line.",
-    )
-    parser.add_argument(
-        "--no-colorized-output",
-        action="store_true",
-        help="Disable ANSI color output in status messages.",
-    )
-    parser.add_argument(
-        "--no-banner",
-        action="store_true",
-        help="Disable the startup ASCII banner.",
-    )
+
     args = parser.parse_args()
 
     set_color_enabled(not args.no_colorized_output)
