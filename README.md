@@ -93,10 +93,10 @@ Override with `--output-data`.
 
 ### OpenGraph
 
-By default, OpenGraph output is placed alongside compiled data:
+By default, OpenGraph output is placed alongside result data:
 
 ```
-.../<base>_opengraph.json
+.tls_cert_hound_data/<domain|domain file name>/<domain|domain file name>_opengraph.json
 ```
 
 Override with `--opengraph-output`.
