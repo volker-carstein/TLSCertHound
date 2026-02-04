@@ -2,6 +2,7 @@
 
 <p>
   TLSCertHound is a crt.sh collector focused on large-scale domain discovery from TLS certificates.
+  <br>
   It supports recursive expansion, cache-backed resumable runs, and OpenGraph export for BloodHound CE using the <a href="https://github.com/p0dalirius/bhopengraph">bhopengraph</a> library.
 </p>
 <p align="center">
