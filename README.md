@@ -1,8 +1,9 @@
 # TLSCertHound
 
-<p align="center">
+<p>
   TLSCertHound is a crt.sh collector focused on large-scale domain discovery from TLS certificates.
-  It supports recursive expansion, cache-backed resumable runs, and OpenGraph export for BloodHound CE using the [bhopengraph](https://github.com/p0dalirius/bhopengraph) library.
+
+  It supports recursive expansion, cache-backed resumable runs, and OpenGraph export for BloodHound CE using the <a href="https://github.com/p0dalirius/bhopengraph">bhopengraph</a> library.
   <br>
   <a href="https://pypi.org/project/tls_cert_hound"><img alt="PyPI" src="https://img.shields.io/pypi/v/tls_cert_hound"></a>
   <a href="https://github.com/volker-carstein/TLSCertHound/releases"><img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/TLSCertHound/releases"></a>
