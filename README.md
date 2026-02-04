@@ -1,8 +1,17 @@
 # TLSCertHound
 
-TLSCertHound is a crt.sh collector focused on large-scale domain discovery from TLS
-certificates. It supports recursive expansion, cache-backed resumable runs, and
-OpenGraph export for BloodHound CE using the [bhopengraph](https://github.com/p0dalirius/bhopengraph) library.
+<p align="center">
+  TLSCertHound is a crt.sh collector focused on large-scale domain discovery from TLS certificates.
+  It supports recursive expansion, cache-backed resumable runs, and OpenGraph export for BloodHound CE using the [bhopengraph](https://github.com/p0dalirius/bhopengraph) library.
+  <br>
+  <a href="https://pypi.org/project/tls_cert_hound"><img alt="PyPI" src="https://img.shields.io/pypi/v/tls_cert_hound"></a>
+  <a href="https://github.com/volker-carstein/TLSCertHound/releases"><img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/TLSCertHound/releases"></a>
+  <a href="https://twitter.com/intent/follow?screen_name=volker_carstein" title="Follow"><img src="https://img.shields.io/twitter/follow/volker_carstein?label=volker_carstein&style=social"></a>
+  <br>
+  <img height=21px src="https://img.shields.io/badge/Get bloodhound:-191646"> <a href="https://specterops.io/bloodhound-enterprise/" title="Get BloodHound Enterprise"><img alt="Get BloodHound Enterprise" height=21px src="https://mintlify.s3.us-west-1.amazonaws.com/specterops/assets/enterprise-edition-pill-tag.svg"></a>
+  <a href="https://specterops.io/bloodhound-community-edition/" title="Get BloodHound Community"><img alt="Get BloodHound Community" height=21px src="https://mintlify.s3.us-west-1.amazonaws.com/specterops/assets/community-edition-pill-tag.svg"></a>
+  <br>
+</p>
 
 Feel free to open issues if anything doesn't work (PR are more than welcome as well!)
 
@@ -14,7 +23,7 @@ Feel free to open issues if anything doesn't work (PR are more than welcome as w
 - Resumable runs (state persisted per domain) with `--show-result` to generate outputs from saved state/cache without querying.
 - Cache reuse and offline OpenGraph generation with `--offline` and `--input-data`.
 - Multi-domain runs from a file with a single combined output with `--domain-file`.
-- OpenGraph export with Search, TLSCertificate, CA, and domain nodes with `--opengraph-output`.
+- OpenGraph export with Search, TLSCertificate, CA, and domain nodes with `--opengraph-output` (produced by default).
 - Blacklist support (simple patterns with `^`, `$`, and `*`) with `--blacklist-file`.
 
 ## Installation
@@ -151,12 +160,12 @@ usage: tls_cert_hound.py [-h] [--recursive] [--depth DEPTH] [--no-disk-write] [-
 Query crt.sh for certificates related to a domain. Supports recursive subdomain discovery, adaptive throttling, and resumable runs.
 
 positional arguments:
-  domain                Domain name to query (e.g. example.com) or keyword (e.g. "google"). Used as root for recursion.
+  domain                Domain name to query (e.g. example.com) or keyword (e.g. "google"). Used for query / as root for recursion. Ignored if --domain-file is present
 
 options:
   -h, --help            show this help message and exit
 
-Advanced options:
+Recursive mode options:
   --recursive           Enable recursive subdomain discovery from certificate data.
   --depth DEPTH         Max recursion depth when --recursive is set (default: unlimited).
 
